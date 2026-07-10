@@ -13,35 +13,55 @@ Client request: $ARGUMENTS
 
 ## Stage -1 — Preflight dependency check (ALWAYS FIRST, before anything else)
 
-This pipeline depends on two other plugins. Verify BOTH are installed before
-doing any classification or dispatching any agent:
+Run this check before any classification and before dispatching any agent.
+The pipeline has one REQUIRED dependency and one OPTIONAL enhancement:
 
-1. Check your available-skills list for `superpowers:brainstorming`,
-   `superpowers:writing-plans`, and `superpowers:executing-plans`.
-2. Check for the gstack skills/commands: `/office-hours`, `/spec`, `/ship`
-   (they may appear as `gstack:office-hours`, `gstack:spec`, `gstack:ship`).
+**1. superpowers — REQUIRED.**
+Check your available-skills list for `superpowers:brainstorming`,
+`superpowers:writing-plans`, and `superpowers:executing-plans`.
 
-**If ANY are missing: HALT.** Do not proceed in a degraded mode, do not
-improvise substitutes, do not dispatch any agent. Tell the client exactly
-what is missing and how to install it, then stop:
+If ANY superpowers skill is missing: **HALT.** Do not proceed in a degraded
+mode, do not improvise substitutes, do not dispatch any agent. Show the
+client exactly this and stop:
 
 ```
-❌ /pipeline cannot run — missing required plugins:
+❌ /pipeline cannot run — required plugin missing:
 
   superpowers:
     /plugin marketplace add obra/superpowers-marketplace
     /plugin install superpowers@superpowers-marketplace
 
-  gstack:
-    /plugin marketplace add <gstack-marketplace-repo>
-    /plugin install gstack
+  (Cowork/Desktop: Customize → Plugins → add the marketplace and install.)
 
-Install the missing plugin(s), restart your session, and run /pipeline again.
+Install it, restart your session, and run /pipeline again.
 ```
 
-(In Cowork/Desktop: Customize → Plugins → install from the marketplace.)
+**2. gstack — OPTIONAL.**
+Check for the gstack skills/commands: `/office-hours`, `/spec`, `/ship`
+(they may appear as `gstack:office-hours`, `gstack:spec`, `gstack:ship`).
 
-If both are present, say nothing about the check and continue to Stage 0.
+- Present → set `GSTACK: on` in the progress ledger. Say nothing.
+- Missing → set `GSTACK: off`, tell the client in ONE line —
+  "gstack not installed — running with superpowers only; shipping will use
+  plain git/gh instead of /ship" — and continue. Do NOT halt.
+
+**When `GSTACK: off`, pass that flag to every agent you dispatch.** Agents
+then follow these substitutions and never attempt to load a gstack skill:
+
+| Stage / agent | gstack skill | Fallback when off |
+|---|---|---|
+| planner | /office-hours, /spec | superpowers:brainstorming + superpowers:writing-plans only |
+| investigator | /investigate | superpowers:systematic-debugging |
+| plan reviewers | /plan-*-review | review against their own agent rubric |
+| unit-tester, qa-tester | /qa-only | their agent instructions as written |
+| code-reviewer | /review | superpowers:requesting-code-review rubric only |
+| security-reviewer | /cso | OWASP Top 10 + STRIDE from its own instructions |
+| perf-tester | /benchmark | its own main-vs-branch comparison method |
+| doc-writer | /document-release | its own doc-update instructions |
+| ship-pr | /ship | plain `git` + `gh`: sync main, re-run full test suite, push branch, `gh pr create`. Any test failure → report back, do not ship |
+
+If superpowers is present, continue to Stage 0 (silently when gstack is
+also present).
 
 ## Stage 0 — Classify
 
