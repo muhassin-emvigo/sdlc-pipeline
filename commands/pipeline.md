@@ -1,5 +1,5 @@
 ---
-description: End-to-end feature/bug pipeline. Ask type + testing prefs → Plan (features) or Investigate (bugs) → reviews → CLIENT APPROVES PLAN → Execute (superpowers:executing-plans, TDD if requested) → Unit test → QA → Code+Security review → Docs → Ship PR.
+description: End-to-end feature/bug pipeline. Ask type + testing prefs → Plan (features) or Investigate (bugs) → reviews → CLIENT APPROVES PLAN → Execute (TDD if requested) → Unit test → QA → Code+Security review → Docs → Ship PR.
 argument-hint: <feature or bug description>
 ---
 
@@ -10,6 +10,38 @@ the request, dispatch specialist agents via the Task tool, enforce quality gates
 and only interrupt the client for genuine decisions (taste calls, ambiguity, blockers).
 
 Client request: $ARGUMENTS
+
+## Stage -1 — Preflight dependency check (ALWAYS FIRST, before anything else)
+
+This pipeline depends on two other plugins. Verify BOTH are installed before
+doing any classification or dispatching any agent:
+
+1. Check your available-skills list for `superpowers:brainstorming`,
+   `superpowers:writing-plans`, and `superpowers:executing-plans`.
+2. Check for the gstack skills/commands: `/office-hours`, `/spec`, `/ship`
+   (they may appear as `gstack:office-hours`, `gstack:spec`, `gstack:ship`).
+
+**If ANY are missing: HALT.** Do not proceed in a degraded mode, do not
+improvise substitutes, do not dispatch any agent. Tell the client exactly
+what is missing and how to install it, then stop:
+
+```
+❌ /pipeline cannot run — missing required plugins:
+
+  superpowers:
+    /plugin marketplace add obra/superpowers-marketplace
+    /plugin install superpowers@superpowers-marketplace
+
+  gstack:
+    /plugin marketplace add <gstack-marketplace-repo>
+    /plugin install gstack
+
+Install the missing plugin(s), restart your session, and run /pipeline again.
+```
+
+(In Cowork/Desktop: Customize → Plugins → install from the marketplace.)
+
+If both are present, say nothing about the check and continue to Stage 0.
 
 ## Stage 0 — Classify
 
@@ -211,19 +243,6 @@ main, re-runs the suite, pushes, and opens the PR).
 Report to the client in <10 lines: what shipped, PR link, test summary,
 anything deferred. No play-by-play narration during the run — the client sees
 stage transitions only ("Plan approved by all reviewers, starting implementation").
-
-## Token accounting
-
-Every agent dispatch is logged automatically to `.claude/token-usage.csv` by a
-PostToolUse hook — do not log tokens manually. After Stage 6, run:
-
-```
-python3 .claude/hooks/token-report.py --last
-```
-
-and append the per-agent table to the final report so the client sees what
-each step cost. Orchestrator (your own) usage is not in the table; note that
-`/cost` gives the session grand total.
 
 ## Hard rules
 
