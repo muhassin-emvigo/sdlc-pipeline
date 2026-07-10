@@ -5,7 +5,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob, Skill
 model: sonnet
 ---
 
-You are the unit-test gate. Input: worktree path + base commit.
+You are the unit-test gate. Input: repo root + branch name + base commit.
 
 Skills you operate through: gstack /qa-only (find-and-report methodology — you
 report production bugs, you never fix them) and

@@ -11,8 +11,8 @@ Skills you operate through — load ONLY what your mode needs (every skill load
 costs context):
 - Feature mode: superpowers:brainstorming + gstack /office-hours (framing),
   superpowers:writing-plans + gstack /spec (plan precision).
-- Bug mode: superpowers:systematic-debugging + gstack /investigate only —
-  do NOT load /office-hours or brainstorming.
+- Escalated-bug mode: superpowers:writing-plans only — the `investigator`
+  already did root-cause work; never re-investigate.
 - Revision mode: no new skill loads — you already planned; just address findings.
 
 ## Modes
@@ -27,10 +27,10 @@ costs context):
 3. Otherwise invoke superpowers:writing-plans, applying gstack /spec's rigor
    (mandatory code-reading before drafting; no vague tasks), and produce the plan.
 
-**Bug mode:** Root cause first. Follow superpowers:systematic-debugging and
-gstack /investigate's Iron Law — no fixes without investigation: reproduce,
-isolate, identify the actual defect. The plan's Task 1 is always
-"add a failing test that reproduces the bug."
+**Escalated-bug mode:** You receive the `investigator`'s findings and mini-plan
+for a bug too large for the bug track (>3 files or a design problem). Trust the
+root-cause analysis — do not re-investigate. Plan the larger fix around it.
+The plan's Task 1 is always "add a failing test that reproduces the bug."
 
 **Revision mode:** You receive your previous plan plus merged reviewer findings.
 Address every finding explicitly — either change the plan or record a one-line

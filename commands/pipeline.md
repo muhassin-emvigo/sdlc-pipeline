@@ -1,5 +1,5 @@
 ---
-description: End-to-end feature/bug pipeline. Ask testing prefs → Plan → CEO/Eng/Design review (parallel) → CLIENT APPROVES PLAN → Execute (superpowers:executing-plans, TDD if requested) → Unit test → Code+Security review (parallel) → Ship PR.
+description: End-to-end feature/bug pipeline. Ask type + testing prefs → Plan (features) or Investigate (bugs) → reviews → CLIENT APPROVES PLAN → Execute (superpowers:executing-plans, TDD if requested) → Unit test → QA → Code+Security review → Docs → Ship PR.
 argument-hint: <feature or bug description>
 ---
 
@@ -17,22 +17,23 @@ Read the request and the repo state, then pick a tier:
 
 - **nano** — typo, copy change, config tweak, one-liner. Skip Stages 1–2.
   Dispatch `implementer` for the fix, then `code-reviewer` only, then `ship-pr`.
-- **bug** — defect with reproduction. Skip CEO review. Planner runs in
-  investigation mode (root cause first, using superpowers:systematic-debugging
-  and gstack /investigate), then Stage 2 runs eng-reviewer only, then continue normally.
-- **feature** — everything else. Full pipeline.
+- Everything else → the client confirms bug vs feature in Stage 0.5.
 
-Announce the tier in one line and proceed. Do not ask the client to confirm the tier.
+Announce the tier in one line and proceed.
 
-## Stage 0.5 — Testing preferences (EVERY run)
+## Stage 0.5 — Type + testing preferences (EVERY non-nano run)
 
-Ask the client two plain-language questions (one batched AskUserQuestion; never
-say "TDD" without explaining it):
+Ask the client three plain-language questions (ONE batched AskUserQuestion;
+never say "TDD" without explaining it):
 
-1. **Test-first development?** "Should we write automated tests before each piece
+1. **Bug or feature?** "Is something broken that we're fixing, or is this new
+   functionality / a change?" → sets `TYPE: bug|feature`
+   (If the request makes it obvious, pre-select the recommended answer but
+   still confirm — the client owns this call.)
+2. **Test-first development?** "Should we write automated tests before each piece
    of code? Slightly slower per step, much safer result. (recommended)"
    → sets flag `TDD: on|off`
-2. **Unit-test round?** "After building, should we run a dedicated pass that adds
+3. **Unit-test round?** "After building, should we run a dedicated pass that adds
    unit tests covering everything that changed? (recommended)"
    → sets flag `UNIT_TESTS: on|off`
 
@@ -40,7 +41,22 @@ Record both flags in the progress ledger; they govern Stages 3 and 4.
 Regardless of the answers, the existing full test suite must pass before any PR
 (pipeline invariant — not negotiable). Never re-ask these questions later in the run.
 
-## Stage 1 — Plan (sequential)
+## Stage 1-B — Investigate (BUG track — no planner)
+
+Dispatch the `investigator` agent (gstack /investigate +
+superpowers:systematic-debugging) with the bug report verbatim and repo root.
+
+- If it returns NEEDS_CONTEXT (reproduction steps, expected vs actual behavior,
+  environment), relay to the client as ONE batched message, re-dispatch with answers.
+- Output: a **mini-plan** at `docs/bugs/<slug>.md` — root cause with evidence,
+  Task 1: failing test that reproduces the bug, Task 2: minimal fix, exact file list.
+- **Escalation rule:** fix touches ≤3 files → proceed. More files, or the
+  investigation reveals a design problem → return ESCALATE; hand the findings
+  to `planner` and switch to the feature track (Stages 1–2).
+- The bug track skips the Stage 2 gauntlet: the mini-plan goes straight to
+  Stage 2.5 client approval. Code + security review still gate the diff at Stage 5.
+
+## Stage 1 — Plan (FEATURE track, sequential)
 
 Dispatch the `planner` agent with: the client request verbatim, tier, the
 TDD/UNIT_TESTS flags, repo root, and paths to any files the client referenced.
@@ -78,15 +94,24 @@ everything else resolves autonomously.
 
 ## Stage 2.5 — Client plan approval (HARD GATE — no code before this passes)
 
-Once the reviewers approve, present the plan to the client in plain language:
+Once the reviewers approve (feature track) or the investigator returns DONE
+(bug track), present the plan to the client in plain language:
 
-- A short summary (what will be built, in what order, key decisions) plus the
-  plan file path (`docs/plans/<slug>.md`) so they can read the full version.
+- A short summary (what will be built/fixed, in what order, key decisions) plus
+  the file path (`docs/plans/<slug>.md`, or `docs/bugs/<slug>.md` for bugs) so
+  they can read the full version.
 - Ask via AskUserQuestion: **Approve and build** | **Request changes**.
 - **Request changes** → collect their changes, re-dispatch `planner` in revision
   mode, re-run only the reviewers whose area the changes touch, then present
   again. No loop cap here — the client owns this gate.
 - Never start Stage 3 without an explicit approval recorded in the ledger.
+
+## Stage 2.7 — ADR (feature track, only if architecture changes)
+
+If the approved plan introduces or changes architecture (new service or module
+boundary, data-model change, new dependency, cross-cutting pattern), dispatch
+`adr-writer` to record the decision in `docs/adr/`. Skip otherwise. This never
+blocks Stage 3 — dispatch it and move on.
 
 ## Stage 3 — Execute (superpowers:executing-plans, dedicated branch)
 
@@ -129,6 +154,13 @@ and base commit. It runs the full suite, checks coverage on changed lines, and a
 missing tests.
 Returns PASS or a fix list → route fixes to a fresh `implementer` → re-run. Max 3 loops.
 
+## Stage 4.5 — QA scenario gate (skip if no user-facing surface)
+
+Dispatch `qa-tester` (gstack /qa-only) with repo root, branch name, and the
+plan/bug file. It walks the acceptance criteria as real user scenarios — happy
+paths, error paths, empty/edge states — and reports findings without fixing
+anything. Findings route to a fresh `implementer`, then re-run. Max 2 loops.
+
 ## Stage 5 — Code + Security review (PARALLEL)
 
 Generate the review diff and write it to a file. **Filter noise out of the
@@ -156,12 +188,25 @@ Both are read-only. Merge findings by severity:
 - Minor → fix in the same pass, no re-review needed.
 Max 2 loops, then escalate remaining items to the client with your recommendation.
 
+## Stage 5.5 — Performance gate (ONLY if the plan flags perf-sensitive work)
+
+If the plan marks any task `perf-sensitive: true` (hot paths, queries, large
+lists, load-time surfaces), dispatch `perf-tester` (gstack /benchmark) to
+compare main vs branch on the touched paths. Regressions route to a fresh
+`implementer`. Skip this stage entirely otherwise.
+
+## Stage 5.8 — Documentation
+
+Dispatch `doc-writer` (gstack /document-release) with the branch name and
+plan/bug file. It updates README and docs to match what changed and commits to
+the branch. Skip for nano tier.
+
 ## Stage 6 — Ship
 
-Dispatch `ship-pr` with: repo root + branch name, plan file path, review
+Dispatch `ship-pr` with: repo root + branch name, plan/bug file path, review
 verdicts, test results, and the TDD/UNIT_TESTS flags (recorded in the PR body).
-It runs superpowers:verification-before-completion, then gstack /ship +
-superpowers:finishing-a-development-branch to open the PR.
+It runs gstack /ship ONLY (no superpowers skills here — /ship already syncs
+main, re-runs the suite, pushes, and opens the PR).
 
 Report to the client in <10 lines: what shipped, PR link, test summary,
 anything deferred. No play-by-play narration during the run — the client sees
