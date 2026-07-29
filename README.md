@@ -2,7 +2,7 @@
 
 An autonomous SDLC orchestrator plugin for Claude Code, Claude Cowork, and Cursor. One command — `/pipeline` — takes a feature or bug from raw request to shipped PR through planning, review gauntlets, TDD execution, testing gates, security review, docs, and ship.
 
-Built on top of **superpowers** and **gstack**, which must be installed first (see [Prerequisites](#prerequisites)).
+Built on top of **superpowers**, **gstack**, and **claude-mem** — all three are required and must be installed first (see [Prerequisites](#prerequisites)).
 
 ## What's inside
 
@@ -16,20 +16,25 @@ The orchestrator never writes production code itself. It classifies your request
 
 ## Prerequisites
 
-This plugin dispatches skills from two other plugins. Install them **before** installing sdlc-pipeline:
+This plugin dispatches skills from three other dependencies. All are **required** — `/pipeline` halts at preflight if any is missing. Install them **before** installing sdlc-pipeline:
 
 1. **superpowers** — provides `brainstorming`, `writing-plans`, `executing-plans`, `test-driven-development`, and more.
    ```
    /plugin marketplace add obra/superpowers-marketplace
    /plugin install superpowers@superpowers-marketplace
    ```
-2. **gstack** — provides `/office-hours`, `/spec`, and `/ship` used by the planning and ship stages.
+2. **gstack** — provides `/office-hours`, `/spec`, and `/ship` used by the planning and ship stages. Installs via git clone + setup script (not a plugin marketplace) — see [garrytan/gstack](https://github.com/garrytan/gstack):
    ```
-   /plugin marketplace add <your-gstack-marketplace-repo>
-   /plugin install gstack
+   git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.claude/skills/gstack
+   cd ~/.claude/skills/gstack && ./setup
+   ```
+3. **claude-mem** — persistent memory across sessions; captures session context and injects it back into future runs.
+   ```
+   /plugin marketplace add thedotmack/claude-mem
+   /plugin install claude-mem
    ```
 
-If your team distributes plugins centrally, both may already be pre-installed — check with `/plugin` before adding them.
+If your team distributes plugins centrally, some may already be pre-installed — check with `/plugin` (and `~/.claude/skills/gstack` for gstack) before adding them.
 
 ## Installation
 

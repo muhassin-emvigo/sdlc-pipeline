@@ -14,54 +14,100 @@ Client request: $ARGUMENTS
 ## Stage -1 — Preflight dependency check (ALWAYS FIRST, before anything else)
 
 Run this check before any classification and before dispatching any agent.
-The pipeline has one REQUIRED dependency and one OPTIONAL enhancement:
+The pipeline has three REQUIRED dependencies — superpowers, gstack, and
+claude-mem. Check all three:
 
-**1. superpowers — REQUIRED.**
+**1. superpowers.**
 Check your available-skills list for `superpowers:brainstorming`,
 `superpowers:writing-plans`, and `superpowers:executing-plans`.
 
-If ANY superpowers skill is missing: **HALT.** Do not proceed in a degraded
-mode, do not improvise substitutes, do not dispatch any agent. Show the
-client exactly this and stop:
-
-```
-❌ /pipeline cannot run — required plugin missing:
-
-  superpowers:
-    /plugin marketplace add obra/superpowers-marketplace
-    /plugin install superpowers@superpowers-marketplace
-
-  (Cowork/Desktop: Customize → Plugins → add the marketplace and install.)
-
-Install it, restart your session, and run /pipeline again.
-```
-
-**2. gstack — OPTIONAL.**
+**2. gstack.**
 Check for the gstack skills/commands: `/office-hours`, `/spec`, `/ship`
 (they may appear as `gstack:office-hours`, `gstack:spec`, `gstack:ship`).
 
-- Present → set `GSTACK: on` in the progress ledger. Say nothing.
-- Missing → set `GSTACK: off`, tell the client in ONE line —
-  "gstack not installed — running with superpowers only; shipping will use
-  plain git/gh instead of /ship" — and continue. Do NOT halt.
+**3. claude-mem.**
+claude-mem is hook/MCP-based and usually has NO entry in the skills list.
+Do NOT infer its state from the session transcript. **Run this live check
+via Bash** (it reflects enable/disable toggles immediately, even mid-session):
 
-**When `GSTACK: off`, pass that flag to every agent you dispatch.** Agents
-then follow these substitutions and never attempt to load a gstack skill:
+```bash
+grep -H -o '"claude-mem[^"]*"[[:space:]]*:[[:space:]]*\(true\|false\)' \
+  ~/.claude/settings.json ~/.claude/settings.local.json \
+  .claude/settings.json .claude/settings.local.json 2>/dev/null
+```
 
-| Stage / agent | gstack skill | Fallback when off |
+(The state is the `enabledPlugins` key — entries look like
+`"claude-mem@thedotmack": true`. Toggles in /plugin write to disk
+immediately, so this check is live even mid-session.)
+
+Interpret the output:
+- contains `: true` and no `: false` → claude-mem ENABLED. Pass.
+- contains `: false` anywhere → conflicting or disabled state. If a
+  project-level file (`.claude/...`) says `false`, it overrides the user
+  file → treat as DISABLED. HALT.
+- no output at all → not installed via the plugin system. Before halting,
+  check your CURRENT tool list for `mcp__claude-mem__*` tools (npx-based
+  installs register hooks/MCP without a plugin entry). Tools present → pass;
+  absent → HALT.
+- If the shell cannot reach `~/.claude` (sandboxed environments such as
+  Cowork), fall back to the `mcp__claude-mem__*` tool-list check alone.
+
+**Never count a claude-mem status/context message earlier in the session as
+evidence.** That message is injected at session start and remains in the
+transcript even after the plugin is disabled — it is always a stale signal.
+
+If ANY of the three is missing or disabled: **HALT.** Do not proceed in a
+degraded mode, do not improvise substitutes, do not dispatch any agent.
+A dependency that is installed but DISABLED counts as missing.
+Note: the superpowers and gstack checks read the skills list, which
+reflects state as of session start; the claude-mem grep is live. Either
+way, enable/disable toggles only take effect in hooks/MCP at the NEXT
+session, so after toggling plugins the client must restart the session
+before re-running /pipeline.
+
+On halt, show the client a **preflight report** in exactly this format —
+fill in the real status per dependency, then show fix instructions ONLY
+for dependencies that are not ✅:
+
+---
+
+## 🚦 /pipeline preflight — cannot start
+
+| Dependency | Status | Provides |
 |---|---|---|
-| planner | /office-hours, /spec | superpowers:brainstorming + superpowers:writing-plans only |
-| investigator | /investigate | superpowers:systematic-debugging |
-| plan reviewers | /plan-*-review | review against their own agent rubric |
-| unit-tester, qa-tester | /qa-only | their agent instructions as written |
-| code-reviewer | /review | superpowers:requesting-code-review rubric only |
-| security-reviewer | /cso | OWASP Top 10 + STRIDE from its own instructions |
-| perf-tester | /benchmark | its own main-vs-branch comparison method |
-| doc-writer | /document-release | its own doc-update instructions |
-| ship-pr | /ship | plain `git` + `gh`: sync main, re-run full test suite, push branch, `gh pr create`. Any test failure → report back, do not ship |
+| superpowers | ✅ Ready / ❌ Missing / ⚠️ Installed but disabled | Planning, TDD & execution discipline |
+| gstack | ✅ Ready / ❌ Missing / ⚠️ Installed but disabled | `/office-hours`, `/spec`, `/ship` |
+| claude-mem | ✅ Ready / ❌ Missing / ⚠️ Installed but disabled | Persistent memory across sessions |
 
-If superpowers is present, continue to Stage 0 (silently when gstack is
-also present).
+**How to fix** *(only the items above that aren't ✅)*
+
+❌ Missing → install it:
+
+- **superpowers**
+  ```
+  /plugin marketplace add obra/superpowers-marketplace
+  /plugin install superpowers@superpowers-marketplace
+  ```
+- **gstack** *(installs via git, not the plugin marketplace)*
+  ```
+  git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.claude/skills/gstack
+  cd ~/.claude/skills/gstack && ./setup
+  ```
+- **claude-mem**
+  ```
+  /plugin marketplace add thedotmack/claude-mem
+  /plugin install claude-mem
+  ```
+
+⚠️ Installed but disabled → enable it: `/plugin` (CLI) or
+**Customize → Plugins** (Cowork/Desktop), toggle it on.
+
+Then **restart your session** and run `/pipeline` again — plugin changes
+only take effect in a fresh session.
+
+---
+
+If all three are ✅, show nothing and continue silently to Stage 0.
 
 ## Stage 0 — Classify
 
