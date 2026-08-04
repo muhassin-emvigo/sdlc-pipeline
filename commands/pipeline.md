@@ -171,6 +171,7 @@ the `planner` in targeted mode as a numbered list:
 # Works in both Claude (${CLAUDE_PLUGIN_ROOT}) and Cursor (${PLUGIN_ROOT})
 HOOK_PATH="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/scripts/check_plan.py"
 if [ -f "$HOOK_PATH" ]; then
+  echo "Running plan linter: $HOOK_PATH"
   python "$HOOK_PATH" docs/plans/<slug> \
       docs/features/<slug>.contract.md \
       docs/features/<original-spec>.md
