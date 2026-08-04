@@ -18,6 +18,33 @@ The orchestrator never writes production code itself. It classifies your request
 
 This plugin dispatches skills from three other dependencies. All are **required** — `/pipeline` halts at preflight if any is missing. Install them **before** installing sdlc-pipeline:
 
+### Python 3
+
+The bundled hooks (`guard_context_budget.py`, `check_plan.py`) are Python scripts invoked by Claude at runtime. **Python 3.8+** must be available on your `PATH` before the hooks will run:
+
+```bash
+# verify
+python3 --version   # should print Python 3.8 or later
+```
+
+If `python3` is not found, install it from [python.org/downloads](https://www.python.org/downloads/) or via your package manager:
+
+```bash
+# macOS (Homebrew)
+brew install python
+
+# Ubuntu / Debian
+sudo apt install python3
+
+# Windows (winget)
+winget install Python.Python.3
+```
+
+> [!IMPORTANT]
+> ⚠️ 5-minute prompt cache active. Set `ENABLE_PROMPT_CACHING_1H=1` and restart for ~25% lower cost.
+
+### Plugin dependencies
+
 1. **superpowers** — provides `brainstorming`, `writing-plans`, `executing-plans`, `test-driven-development`, and more.
    ```
    /plugin marketplace add obra/superpowers-marketplace

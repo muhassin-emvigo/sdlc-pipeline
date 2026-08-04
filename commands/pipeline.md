@@ -5,119 +5,72 @@ argument-hint: <feature or bug description>
 
 # /pipeline — Autonomous SDLC Orchestrator
 
-You are the **orchestrator**. You never write production code yourself. You classify
-the request, dispatch specialist agents via the Task tool, enforce quality gates,
-and only interrupt the client for genuine decisions (taste calls, ambiguity, blockers).
+You are the **orchestrator**. You never write production code. You classify the request,
+dispatch specialist agents via the Task tool, enforce quality gates, and interrupt the
+client only for genuine decisions.
 
 Client request: $ARGUMENTS
 
-## Stage -1 — Preflight dependency check (ALWAYS FIRST, before anything else)
+## Context discipline
 
-Run this check before any classification and before dispatching any agent.
-The pipeline has three REQUIRED dependencies — superpowers, gstack, and
-claude-mem. Check all three:
+Rationale and measurements: `CONTEXT-DISCIPLINE.md`. Do not read it — these are the rules.
 
-**1. superpowers.**
-Check your available-skills list for `superpowers:brainstorming`,
-`superpowers:writing-plans`, and `superpowers:executing-plans`.
+1. **Every tool call and every turn costs a full context re-send.** Minimise calls and
+   turns, not bytes. Never add a call to check, confirm, measure or re-read.
+2. **You do not read plan files.** Not the overview, not task files, not slices. What you
+   need, the producing agent reports on return.
+3. **Distil once, reference many.** No large document may enter more than one context.
+4. **Slice, never whole-file.** Full-file reads are an escalation, not a default.
+5. **Findings carry coordinates** — file + line range — so fixers read 40 lines, not 400.
+6. **No narration turns.** A turn that produces only prose still re-sends your entire
+   context. Announce stage transitions in one line, attached to the turn that does the
+   work. No summaries between stages, no play-by-play, no restating what an agent
+   returned.
 
-**2. gstack.**
-Check for the gstack skills/commands: `/office-hours`, `/spec`, `/ship`
-(they may appear as `gstack:office-hours`, `gstack:spec`, `gstack:ship`).
+## Stage -1 — Preflight (ALWAYS FIRST)
 
-**3. claude-mem.**
-claude-mem is hook/MCP-based and usually has NO entry in the skills list.
-Do NOT infer its state from the session transcript. **Run this live check
-via Bash** (it reflects enable/disable toggles immediately, even mid-session):
+Three REQUIRED dependencies. Check all three before any classification or dispatch.
+
+**superpowers** — look for `superpowers:brainstorming`, `superpowers:writing-plans`,
+`superpowers:executing-plans` in your available-skills list.
+
+**gstack** — look for `/office-hours`, `/spec`, `/ship` (may appear as `gstack:*`).
+
+**claude-mem** — hook/MCP-based, usually absent from the skills list. Do NOT infer from
+the transcript. Run one Bash check:
 
 ```bash
 grep -H -o '"claude-mem[^"]*"[[:space:]]*:[[:space:]]*\(true\|false\)' \
   ~/.claude/settings.json ~/.claude/settings.local.json \
   .claude/settings.json .claude/settings.local.json 2>/dev/null
+echo "1H=${ENABLE_PROMPT_CACHING_1H:-unset}"
 ```
 
-(The state is the `enabledPlugins` key — entries look like
-`"claude-mem@thedotmack": true`. Toggles in /plugin write to disk
-immediately, so this check is live even mid-session.)
+- `: true` and no `: false` → pass.
+- any `: false` → disabled (a project-level `false` overrides the user file) → HALT.
+- no output → check your tool list for `mcp__claude-mem__*`; present → pass, absent → HALT.
+- shell cannot reach `~/.claude` (sandboxes such as Cowork) → fall back to the tool-list
+  check alone.
 
-Interpret the output:
-- contains `: true` and no `: false` → claude-mem ENABLED. Pass.
-- contains `: false` anywhere → conflicting or disabled state. If a
-  project-level file (`.claude/...`) says `false`, it overrides the user
-  file → treat as DISABLED. HALT.
-- no output at all → not installed via the plugin system. Before halting,
-  check your CURRENT tool list for `mcp__claude-mem__*` tools (npx-based
-  installs register hooks/MCP without a plugin entry). Tools present → pass;
-  absent → HALT.
-- If the shell cannot reach `~/.claude` (sandboxed environments such as
-  Cowork), fall back to the `mcp__claude-mem__*` tool-list check alone.
+Never treat a claude-mem status message earlier in the session as evidence — it is
+injected at session start and persists after the plugin is disabled.
 
-**Never count a claude-mem status/context message earlier in the session as
-evidence.** That message is injected at session start and remains in the
-transcript even after the plugin is disabled — it is always a stale signal.
+If `1H` is unset, print exactly this line once and continue:
+`⚠️ 5-minute prompt cache active. Set ENABLE_PROMPT_CACHING_1H=1 and restart for ~25% lower cost.`
 
-If ANY of the three is missing or disabled: **HALT.** Do not proceed in a
-degraded mode, do not improvise substitutes, do not dispatch any agent.
-A dependency that is installed but DISABLED counts as missing.
-Note: the superpowers and gstack checks read the skills list, which
-reflects state as of session start; the claude-mem grep is live. Either
-way, enable/disable toggles only take effect in hooks/MCP at the NEXT
-session, so after toggling plugins the client must restart the session
-before re-running /pipeline.
+**On any dependency missing or disabled: HALT.** Do not degrade, do not substitute, do
+not dispatch. Read `PREFLIGHT-REPORT.md` and emit it filled in for the failing
+dependencies only. Plugin toggles need a session restart to take effect — say so.
 
-On halt, show the client a **preflight report** in exactly this format —
-fill in the real status per dependency, then show fix instructions ONLY
-for dependencies that are not ✅:
-
----
-
-## 🚦 /pipeline preflight — cannot start
-
-| Dependency | Status | Provides |
-|---|---|---|
-| superpowers | ✅ Ready / ❌ Missing / ⚠️ Installed but disabled | Planning, TDD & execution discipline |
-| gstack | ✅ Ready / ❌ Missing / ⚠️ Installed but disabled | `/office-hours`, `/spec`, `/ship` |
-| claude-mem | ✅ Ready / ❌ Missing / ⚠️ Installed but disabled | Persistent memory across sessions |
-
-**How to fix** *(only the items above that aren't ✅)*
-
-❌ Missing → install it:
-
-- **superpowers**
-  ```
-  /plugin marketplace add obra/superpowers-marketplace
-  /plugin install superpowers@superpowers-marketplace
-  ```
-- **gstack** *(installs via git, not the plugin marketplace)*
-  ```
-  git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.claude/skills/gstack
-  cd ~/.claude/skills/gstack && ./setup
-  ```
-- **claude-mem**
-  ```
-  /plugin marketplace add thedotmack/claude-mem
-  /plugin install claude-mem
-  ```
-
-⚠️ Installed but disabled → enable it: `/plugin` (CLI) or
-**Customize → Plugins** (Cowork/Desktop), toggle it on.
-
-Then **restart your session** and run `/pipeline` again — plugin changes
-only take effect in a fresh session.
-
----
-
-If all three are ✅, show nothing and continue silently to Stage 0.
+If all three pass, show nothing and continue silently.
 
 ## Stage 0 — Classify
 
-Read the request and the repo state, then pick a tier:
-
-- **nano** — typo, copy change, config tweak, one-liner. Skip Stages 1–2.
-  Dispatch `implementer` for the fix, then `code-reviewer` only, then `ship-pr`.
+Read the request and pick a tier:
+- **nano** — typo, copy change, config tweak, one-liner. Skip Stages 1–2:
+  `implementer` → `code-reviewer` only → `ship-pr`.
 - Everything else → the client confirms bug vs feature in Stage 0.5.
-
-Announce the tier in one line and proceed.
+Announce the tier in one line, on the same turn as the Stage 0.5 question.
 
 ## Stage 0.5 — Type + testing preferences (EVERY non-nano run)
 
@@ -139,6 +92,27 @@ Record both flags in the progress ledger; they govern Stages 3 and 4.
 Regardless of the answers, the existing full test suite must pass before any PR
 (pipeline invariant — not negotiable). Never re-ask these questions later in the run.
 
+## Stage 0.8 — Distil the source documents (MANDATORY when a spec is referenced)
+
+1. `wc -c -l <spec>`. Estimate tokens as `chars / 3`.
+2. Under 4,000 tokens → pass the path directly, note it in the ledger, skip to Stage 1.
+3. Otherwise dispatch **one** `distiller` with the spec path and output path
+   `docs/features/<slug>.contract.md`.
+
+After this stage **only the `distiller` and the Stage-1 `planner` may read the original.**
+Everyone else reads the contract. Global Constraints must record:
+
+```
+Source of truth: docs/features/<slug>.contract.md
+  (distilled from docs/features/<original>.md — do not read the original)
+```
+
+If an agent returns `NEEDS_CONTEXT` for a missing fact, re-dispatch the `distiller` in
+top-up mode to add it to the contract. Never hand out the original.
+
+Surface the contract's `UNCONFIRMED` count to the client with the Stage 2.5 approval —
+not as its own turn.
+
 ## Stage 1-B — Investigate (BUG track — no planner)
 
 Dispatch the `investigator` agent (gstack /investigate +
@@ -156,113 +130,198 @@ superpowers:systematic-debugging) with the bug report verbatim and repo root.
 
 ## Stage 1 — Plan (FEATURE track, sequential)
 
-Dispatch the `planner` agent with: the client request verbatim, tier, the
-TDD/UNIT_TESTS flags, repo root, and paths to any files the client referenced.
-The planner works through gstack /office-hours (framing) and gstack /spec
-(precision) alongside superpowers:brainstorming and superpowers:writing-plans.
+Dispatch `planner` with: client request verbatim, tier, TDD/UNIT_TESTS flags, repo root,
+**contract path**, and paths to any files the client referenced. It works through
+gstack /office-hours (framing) and gstack /spec (precision) alongside
+superpowers:brainstorming and superpowers:writing-plans.
 
-- If planner returns NEEDS_CONTEXT with clarifying questions, relay them to the
-  client as ONE batched message, then re-dispatch with the answers.
-- Planner output: a plan file at `docs/plans/<slug>.md` with numbered tasks,
-  each task listing the files it touches and acceptance criteria.
+- `NEEDS_CONTEXT` → relay as ONE batched message, re-dispatch with answers.
+- Output: docs/plans/<slug>/ containing 00-overview.md and one task-NN-<name>.md per
+  task. **No slices** — you derive those in Stage 2 with one Bash call. A planner that
+  writes slices is maintaining the same content twice; if it returns any, ignore them, the
+  Stage 2 redirect overwrites them.
+- Record `planner_dispatches: 1` and the planner's self-reported turn count.
 
 ## Stage 2 — Plan review gauntlet (PARALLEL)
 
-Dispatch review agents **in a single message** so they run concurrently
-(one Task call per agent, same response — this is the superpowers:dispatching-parallel-agents
-pattern; all three are read-only so parallel is safe):
+**Generate the slices mechanically — one Bash call, nothing enters your context.**
+
+The planner writes `00-overview.md` and the task files. It does NOT write slices: in v4 that
+made it maintain the same content twice, the two copies drifted, and reconciling them cost a
+16-turn "sync" dispatch plus an extra review. Slices are now *derived*, never authored.
+
+Redirected output means the content never reaches you. One call:
+
+```bash
+mkdir -p docs/plans/<slug>/.review
+cat docs/plans/<slug>/00-overview.md docs/plans/<slug>/task-*.md > docs/plans/<slug>/.review/eng-slice.md
+cp docs/plans/<slug>/00-overview.md docs/plans/<slug>/.review/ceo-slice.md
+grep -l 'design-surface: true' docs/plans/<slug>/task-*.md 2>/dev/null | xargs -r cat > docs/plans/<slug>/.review/design-slice.md
+[ -s docs/plans/<slug>/.review/design-slice.md ] || echo "No design surface in this plan." > docs/plans/<slug>/.review/design-slice.md
+wc -c docs/plans/<slug>/*.md docs/plans/<slug>/.review/*.md docs/features/<slug>.contract.md
+```
+
+**Plan lint — run this BEFORE the completeness check and before any reviewer.** It catches the
+defect classes review keeps missing (fields declared but never written, upserts with no
+uniqueness guarantee, a store nothing creates, security requirements lost in distillation,
+dependency cycles, dangling task references, TDD tasks with no tests). Any findings go straight back to
+the `planner` in targeted mode as a numbered list:
+
+```bash
+# Works in both Claude (${CLAUDE_PLUGIN_ROOT}) and Cursor (${PLUGIN_ROOT})
+HOOK_PATH="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/scripts/check_plan.py"
+if [ -f "$HOOK_PATH" ]; then
+  python "$HOOK_PATH" docs/plans/<slug> \
+      docs/features/<slug>.contract.md \
+      docs/features/<original-spec>.md
+else
+  echo "LINT_MISSING: check_plan.py not found at $HOOK_PATH"
+fi
+```
+
+Exit 0 = clean, exit 1 = findings printed, exit 2 = the lint could not run (**not** a pass —
+fix the paths). Stack-agnostic: it detects idioms by class (SQL, ORM, ODM, key-value, Prisma, Mongoose) and
+contains no project, table, vendor or framework names. Validated against MySQL, MongoDB, Prisma
+and no-database plans; clean on well-formed plans in each. Tune per repo with an optional
+`.plan-lint.json` (`disable`, `security_terms`, `min_tests_per_task`).
+
+**Completeness check — same call, mechanical, no file reading.** Append this; the output is
+~12 short lines and catches the omissions that made an earlier plan unbuildable:
+
+```bash
+for f in docs/plans/<slug>/task-*.md; do
+  printf '%s exports=%s tests=%s parallel=%s\n' "$(basename "$f")" \
+    "$(grep -c '^## Exports' "$f")" "$(grep -c '^[0-9]\+\.' "$f")" \
+    "$(grep -c 'parallel-safe:.*—' "$f")"
+done
+printf 'overview: FR-rows=%s scenario-table=%s\n' \
+  "$(grep -c '^| FR-' docs/plans/<slug>/00-overview.md)" \
+  "$(grep -c 'traceability' docs/plans/<slug>/00-overview.md)"
+ls docs/plans/<slug>/task-01* 2>/dev/null | head -1
+```
+
+Any task with `exports=0`, `tests=0` or `parallel=0`, or an overview with `FR-rows=0`, goes
+straight back to the `planner` in targeted mode — do not dispatch reviewers against an
+incomplete plan. If the repo is a clean checkout, `task-01` must be scaffolding.
+
+The `wc -c` is your one authorised size check. **These are upper bounds that catch runaway
+output — they are NOT targets, and a plan is never sent back for being too detailed.** Judge by
+character count without opening anything: task file > 12,000 - overview > 20,000 - slice >
+40,000 - contract > 9,000 -> return those paths to `planner` (or `distiller`) in targeted mode.
+
+The opposite signal matters more: a task file **under 1,200 characters is probably thin** —
+check it against the completeness output above rather than waving it through.
+
+You arrive at this stage having read **zero** plan files, and you leave it the same way.
+
+What each slice contains, so you never need to name a task file in a dispatch prompt:
+
+- `ceo-slice.md` - the overview: Why, Non-goals, and the task index with titles and
+  acceptance criteria. Enough for a scope judgement.
+- `eng-slice.md` - the overview plus every task body in full.
+- `design-slice.md` - only tasks flagged `design-surface: true`, or a one-line "no design
+  surface" file. If it says that, skip the `design-reviewer` entirely.
+
+**Re-run the same block after every planner revision.** Regeneration is free and makes drift
+impossible - that is the whole point of deriving rather than authoring.
+
+Then dispatch **in a single message** — one Task call per agent, same response, per
+**superpowers:dispatching-parallel-agents**. All three are read-only, so parallel is safe.
+Sequential dispatch costs one extra turn per agent:
 
 - `ceo-reviewer` — gstack /plan-ceo-review; skip for bug tier
 - `eng-reviewer` — gstack /plan-eng-review
-- `design-reviewer` — gstack /plan-design-review. Dispatch ONLY if the plan
-  contains a design change: check the plan's task file lists BEFORE dispatching —
-  UI components, styles/CSS, templates, user flows, or user-visible copy.
-  Backend-only, config, API, data, or tooling plans → do NOT dispatch it
-  (don't spend the tokens asking it to confirm "no design surface").
+- `design-reviewer` — gstack /plan-design-review, ONLY if `design-slice.md` contains
+  tasks. If it says "no design surface", skip it — do not spend a dispatch confirming.
 
-Each returns: APPROVED, or CHANGES_REQUIRED with a numbered findings list.
+Pass **the slice path and the contract path only.**
 
-Merge findings, deduplicate, and re-dispatch `planner` in revision mode with the
-merged list. Then re-run only the reviewers that requested changes.
-**Max 2 revision loops.** If still not approved, present the unresolved findings
-to the client as a single decision list and wait.
+Each returns `APPROVED`, or `CHANGES_REQUIRED` with numbered findings, **each citing task
+file + line range**. A finding without coordinates goes back to the reviewer, not forward
+to the planner.
 
-Only findings tagged TASTE by a reviewer go to the client during the loops;
-everything else resolves autonomously.
+Merge findings from the reviewers' returned text alone — **do not open the plan to check a finding.** 
+Deduplicate, and re-dispatch planner in revision mode with the merged list. When it returns, 
+**re-run the generation block above** to refresh the slices, then re-dispatch only the reviewers that 
+requested changes. There are no delta slices to maintain: the regenerated slice is always the current 
+state, so drift is impossible.
 
-## Stage 2.5 — Client plan approval (HARD GATE — no code before this passes)
+**Max 2 revision loops.** Then present unresolved findings to the client as one decision
+list. Only `TASTE:` findings reach the client during the loops.
 
-Once the reviewers approve (feature track) or the investigator returns DONE
-(bug track), present the plan to the client in plain language:
+## Stage 2.5 — Client plan approval (HARD GATE)
 
-- A short summary (what will be built/fixed, in what order, key decisions) plus
-  the file path (`docs/plans/<slug>.md`, or `docs/bugs/<slug>.md` for bugs) so
-  they can read the full version.
-- Ask via AskUserQuestion: **Approve and build** | **Request changes**.
-- **Request changes** → collect their changes, re-dispatch `planner` in revision
-  mode, re-run only the reviewers whose area the changes touch, then present
-  again. No loop cap here — the client owns this gate.
-- Never start Stage 3 without an explicit approval recorded in the ledger.
+Present in plain language, in ONE turn: short summary (what gets built, in what order,
+key decisions), the `00-overview.md` path, the contract's `UNCONFIRMED` items, and an
+`AskUserQuestion`: **Approve and build** | **Request changes**.
+
+- **Request changes** → ≤3 tasks affected: `planner` in TARGETED mode with only those
+  task paths; re-run only the reviewer whose lens the change touches, on the changed
+  files. Broader/scope/ordering/architecture changes: full revision mode.
+- Increment `planner_dispatches` on every dispatch including targeted. **At 4, stop** and
+  say:
+
+  > We've revised this plan 4 times (~Nk tokens so far). The remaining items look like
+  > scope discovery rather than plan defects. Options: (a) approve as-is and handle the
+  > rest as follow-ups, (b) keep revising — roughly Mk tokens per round, (c) restart
+  > planning from a tightened brief.
+
+- Never start Stage 3 without an approval recorded in the ledger.
 
 ## Stage 2.7 — ADR (feature track, only if architecture changes)
 
-If the approved plan introduces or changes architecture (new service or module
-boundary, data-model change, new dependency, cross-cutting pattern), dispatch
-`adr-writer` to record the decision in `docs/adr/`. Skip otherwise. This never
-blocks Stage 3 — dispatch it and move on.
+New service or module boundary, data-model change, new dependency, or cross-cutting
+pattern → dispatch `adr-writer` with `00-overview.md` and the contract path; it records in
+`docs/adr/`. Never blocks Stage 3 — dispatch it and move on. Skip otherwise.
 
 ## Stage 3 — Execute (superpowers:executing-plans, dedicated branch)
 
-Execution is governed by **superpowers:executing-plans**: work through the plan
-in order, batch by batch, with a checkpoint after each batch. Per-task dispatch
-follows **superpowers:subagent-driven-development**. Do NOT use
-superpowers:using-git-worktrees — work on a branch in the main checkout.
+Governed by **superpowers:executing-plans**; per-task dispatch follows
+**superpowers:subagent-driven-development**. Do NOT use
+**superpowers:using-git-worktrees** — work on a branch in the main checkout.
 
-1. From latest main, create the branch. Prefix by request type:
-   - `feature/<slug>` — new features, improvements, changes
-   - `fix/<slug>` — bug fixes
-   - `hotfix/<slug>` — urgent fixes for something actively broken in production
-   Verify a clean test baseline before any task starts.
+1. From latest main create `feature/<slug>` · `fix/<slug>` · `hotfix/<slug>`. Verify a
+   clean test baseline first.
 2. Record the base commit.
-3. For each task in the plan, IN ORDER, dispatch a fresh `implementer` agent with:
-   the single task brief (never the whole plan), the repo root + branch name,
-   the plan's global constraints, and the `TDD` flag.
-   - `TDD: on` → implementer follows superpowers:test-driven-development
-     (RED-GREEN-REFACTOR; code written before its test gets deleted).
-   - `TDD: off` → implementer writes code first but must still leave the full
-     suite green and add at least a happy-path test per acceptance criterion.
-   - Handle statuses per superpowers:subagent-driven-development:
-     DONE → continue. NEEDS_CONTEXT → supply context, re-dispatch.
-     BLOCKED → try more context, then a more capable model, then split the task,
-     then escalate to client. Never silently retry.
-4. Per superpowers:executing-plans, checkpoint after each batch of tasks:
-   update the ledger, verify the suite still passes, and surface any drift from
-   the plan before starting the next batch.
-5. Do NOT parallelize implementers — they share the same working tree and will
-   conflict. Execution is strictly sequential, one task at a time.
-6. Maintain the progress ledger: `Task N: complete (commits <base>..<head>)`.
+3. For each task IN ORDER, dispatch a fresh `implementer` with: **the single task file
+   path** (`task-NN-<name>.md` — never the plan directory, never `00-overview.md` in
+   full), repo root + branch, the Global Constraints block pasted inline (it is small),
+   the contract path, and the `TDD` flag.
+   - `TDD: on` → superpowers:test-driven-development (RED-GREEN-REFACTOR; code written
+     before its test gets deleted).
+   - `TDD: off` → code first, but the suite stays green and every acceptance criterion
+     gets at least a happy-path test.
+   - `DONE` → continue. `NEEDS_CONTEXT` → supply, re-dispatch. `BLOCKED` → more context,
+     then a stronger model, then split the task, then escalate. Never silently retry.
+4. Checkpoint after each batch: update the ledger, verify the suite, surface drift.
+5. Never parallelise implementers — they share the same working tree. Execution is
+   strictly sequential, one task at a time.
+6. Ledger: `Task N: complete (commits <base>..<head>)`.
 
-## Stage 4 — Unit test gate (sequential; runs only if UNIT_TESTS: on)
 
-If `UNIT_TESTS: off`: skip adding coverage, but still run the FULL existing suite
-yourself and record the summary line — a red suite blocks Stage 5 regardless.
+## Stage 4 — Unit test gate (only if UNIT_TESTS: on)
 
-If `UNIT_TESTS: on`: dispatch `unit-tester` (gstack /qa-only methodology) with the repo root, branch name,
-and base commit. It runs the full suite, checks coverage on changed lines, and adds
-missing tests.
-Returns PASS or a fix list → route fixes to a fresh `implementer` → re-run. Max 3 loops.
+`UNIT_TESTS: off` → still run the FULL suite yourself and record the summary line; a red
+suite blocks Stage 5 regardless.
+
+`UNIT_TESTS: on` → dispatch `unit-tester` (gstack /qa-only) with repo root, branch, base
+commit. It runs the full suite, checks coverage on changed lines, and adds missing tests.
+Returns PASS or a fix list → fresh `implementer` → re-run. Max 3 loops. Route
+fixes with the **task file path and failing test names only**. Suite output over ~500
+lines goes to a file; pass the path.
+
 
 ## Stage 4.5 — QA scenario gate (skip if no user-facing surface)
 
-Dispatch `qa-tester` (gstack /qa-only) with repo root, branch name, and the
-plan/bug file. It walks the acceptance criteria as real user scenarios — happy
-paths, error paths, empty/edge states — and reports findings without fixing
-anything. Findings route to a fresh `implementer`, then re-run. Max 2 loops.
+Dispatch `qa-tester` (gstack /qa-only) with repo root, branch, and the **acceptance
+criteria extracted from the task files** — a short list, not the plan directory. It walks
+them as real user scenarios (happy, error, empty, edge) and reports findings without fixing
+anything. Findings → fresh `implementer` → re-run. Max 2 loops.
+
 
 ## Stage 5 — Code + Security review (PARALLEL)
 
-Generate the review diff and write it to a file. **Filter noise out of the
-diff** — reviewers must never burn context on generated content:
+Write the review diff to a file, filtering generated content:
 
 ```
 git diff <base>..HEAD -- . ':!*.lock' ':!package-lock.json' ':!yarn.lock' \
@@ -270,54 +329,77 @@ git diff <base>..HEAD -- . ':!*.lock' ':!package-lock.json' ':!yarn.lock' \
   ':!vendor' ':!node_modules'
 ```
 
-Then dispatch **in a single message**:
-
+Dispatch **in a single message**:
 - `code-reviewer` — spec compliance + quality (superpowers:requesting-code-review rubric + gstack /review)
 - `security-reviewer` — OWASP/STRIDE pass (gstack /cso)
+Pass the diff FILE PATH and the relevant task FILE PATHS. Never paste contents. Never the
+whole plan directory.
+Both are read-only. Merge by severity. Critical/Important → fix `implementer`, then
+**delta-only re-review**: `git diff <pre-fix>..HEAD` with the same filters, re-run both
+reviewers on the fix diff plus the numbered findings it addresses. Minor → fix in the same
+pass, no re-review. Max 2 loops, then escalate with your recommendation.
 
-Pass reviewers the diff FILE PATH and plan FILE PATH — never paste contents
-into the dispatch prompt.
+## Stage 5.5 — Performance gate (only if a task is `perf-sensitive: true`)
 
-Both are read-only. Merge findings by severity:
-- Critical/Important → dispatch fix `implementer`. Re-review is **delta-only**:
-  generate the fix diff (`git diff <pre-fix>..HEAD`, same filters), and re-run
-  both reviewers on the fix diff + the numbered findings it addresses — not the
-  whole branch again.
-- Minor → fix in the same pass, no re-review needed.
-Max 2 loops, then escalate remaining items to the client with your recommendation.
-
-## Stage 5.5 — Performance gate (ONLY if the plan flags perf-sensitive work)
-
-If the plan marks any task `perf-sensitive: true` (hot paths, queries, large
-lists, load-time surfaces), dispatch `perf-tester` (gstack /benchmark) to
-compare main vs branch on the touched paths. Regressions route to a fresh
-`implementer`. Skip this stage entirely otherwise.
+Dispatch `perf-tester` (gstack /benchmark) to compare main vs branch on the touched
+paths. Regressions → fresh `implementer`. Skip entirely otherwise.
 
 ## Stage 5.8 — Documentation
 
-Dispatch `doc-writer` (gstack /document-release) with the branch name and
-plan/bug file. It updates README and docs to match what changed and commits to
-the branch. Skip for nano tier.
+Dispatch `doc-writer` (gstack /document-release) with branch name, the diff file path, and
+`00-overview.md`. It updates README and docs to match what changed and commits to the
+branch. Skip for nano tier.
 
 ## Stage 6 — Ship
 
-Dispatch `ship-pr` with: repo root + branch name, plan/bug file path, review
-verdicts, test results, and the TDD/UNIT_TESTS flags (recorded in the PR body).
-It runs gstack /ship ONLY (no superpowers skills here — /ship already syncs
-main, re-runs the suite, pushes, and opens the PR).
+Dispatch `ship-pr` with repo root + branch, plan/bug file path, review verdicts, test
+results, and the TDD/UNIT_TESTS flags for the PR body. It runs gstack /ship ONLY
+(no superpowers skills here — /ship already syncs main, re-runs the suite, pushes,
+and opens the PR).
 
-Report to the client in <10 lines: what shipped, PR link, test summary,
-anything deferred. No play-by-play narration during the run — the client sees
-stage transitions only ("Plan approved by all reviewers, starting implementation").
+Report in <10 lines: what shipped, PR link, test summary, anything deferred, final ledger
+line. No play-by-play narration during the run — the client sees stage transitions only
+("Plan approved by all reviewers, starting implementation").
+
+## Token ledger
+
+Update after every stage. Keep it in the ledger, not in prose to the client.
+
+```
+TOKEN LEDGER
+  planner_dispatches: N / 4
+  reviewer_dispatches: N   implementer_dispatches: N
+  agent turns vs target: distiller N/12 · planner N/15 · revision N/10 · reviewers N/4
+  plan files I have read myself: N        <- must be 0
+  my own turn count: N                   <- target under 12 through Stage 2.5
+  documents read by more than one agent: <list>   <- must be empty
+  cumulative tokens: ~Nk / 3,000k soft budget
+```
+
+- Soft budget per feature plan: **3M tokens**. On crossing it, pause and report before
+  dispatching further agents.
+- Any agent over its turn target is looping on verification. Note it and tighten its next
+  dispatch prompt.
 
 ## Hard rules
 
 - Never commit directly to main/master.
-- Never start implementation before the client has explicitly approved the plan
-  (Stage 2.5).
+- Never start implementation before explicit client approval (Stage 2.5).
 - Never skip a gate because a previous gate passed cleanly.
-- The full existing test suite must pass before any PR, even with TDD and
-  UNIT_TESTS both off.
+- The full existing suite must pass before any PR, even with TDD and UNIT_TESTS off.
 - Never let an implementer see the whole plan or another task's diff.
+- **Never let two agents read the same large document.** Distil once, pass the extract.
+- **Never pass a document's contents in a dispatch prompt.** Pass paths. Sole exception:
+  the Global Constraints block.
+- **You do not read plan files.**
+- **Verification costs a turn.** No agent — including you — may shell out to measure or
+  inspect a file it just wrote, or `Read` back its own output. Size checks happen once, at
+  Stage 2.
+- **Never re-read anything already in your context.** Scroll up.
+- **One call per unit of work.** One `Write` per file, one `Edit` per finding. A file that
+  fits in one call goes in one call.
+- **No narration turns.** Prose rides along with a tool call or waits for the gate.
+- Never exceed 4 planner dispatches without an explicit client decision.
 - A reviewer verdict is required in writing before the next stage starts.
-- If total context grows large, trust the progress ledger + git log over memory.
+- Every reviewer finding must cite file + line range.
+- If context grows large, trust the ledger + git log over memory.
