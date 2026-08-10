@@ -14,6 +14,8 @@ rule below was first written as a prompt instruction and violated anyway.
   3. No shelling out to measure a markdown file (wc/stat/du/Measure-Object).
   4. An agent may not Read a `*.contract.md` it wrote itself.
   5. No Read of a path this agent already read in this session.
+  9. No shell dump (`cat`, `grep -n ""`, `sed -n '1,$p'`) of a file rules 1-2 would deny.
+ 10. No second full-test-suite run inside one dispatch (targeted runs always allowed).
 
 Measured justification: 83 full reads of two documents produced ~9.3M tokens of
 re-transmission - 29% of a 32.3M-token, $20.87 session. A single planner spent
@@ -187,17 +189,42 @@ def file_stats(path: str):
 CONTRACT_DIRS = ("", "docs/features", "docs", "features")
 
 
+# Rule 2 applies to prose specification documents only. A distilled contract can only
+# ever shadow another *document* - never source code, and never a derived plan artifact.
+#
+# v6.2: in a real run this rule denied an implementer `product_list_page.dart` and a
+# unit-tester `product_list_page_test.dart`, telling both to "read the contract instead"
+# for the source file they were being asked to modify. Cause: the fuzzy stem match below
+# normalises punctuation away, so `product_list_page.dart` -> `productlistpagedart`,
+# which *contains* the contract stem `productlistpage`. Every source file named after the
+# feature was therefore unreadable. The agents worked around it with `cat -n`, so the rule
+# cost turns and blocked nothing. Both gates below close that.
+SPEC_DOC_EXTS = (".md", ".markdown")
+
+# Derived plan artifacts. These are outputs of the pipeline, not the original spec, so a
+# contract never shadows them. Checked before Rule 2 - ALWAYS_ALLOW is checked far later
+# (Rule 1) and so did not protect them.
+DERIVED_ARTIFACTS = ["*.contract.md", "*-slice.md", "*-slice-delta.md", "task-*.md", "00-overview.md"]
+
+
 def contract_beside(path: str):
-    """If `path` is an original doc that has been distilled, return the contract path.
+    """If `path` is an original spec DOCUMENT that has been distilled, return the contract.
 
     Matching is by filename stem, and tolerates the distiller shortening the name
     (`01_authentication_product_setup_registration.md` ->
      `auth-product-setup-registration.contract.md`) by also accepting any contract in
     CONTRACT_DIRS whose stem is a substring of the original's, or vice versa.
+
+    Returns None for anything that is not a markdown document, and for derived plan
+    artifacts - see SPEC_DOC_EXTS / DERIVED_ARTIFACTS above for why.
     """
     if path.endswith(CONTRACT_SUFFIX):
         return None
-    stem = re.sub(r"\.md$", "", os.path.basename(path))
+    if not os.path.basename(path).lower().endswith(SPEC_DOC_EXTS):
+        return None  # source code, tests, config: never shadowed by a contract
+    if basename_matches(path, DERIVED_ARTIFACTS):
+        return None  # pipeline output, not the original spec
+    stem = re.sub(r"\.(md|markdown)$", "", os.path.basename(path), flags=re.IGNORECASE)
     if not stem:
         return None
 
@@ -298,6 +325,106 @@ def already_read(context_id: str, path: str, tool_input: dict) -> bool:
 MEASURE_CMD = re.compile(
     r"\b(wc|stat|du|Get-Item|Measure-Object|Get-Content)\b", re.IGNORECASE
 )
+
+# Rule 9 (v6.2) - a shell command that dumps a whole file is a `Read` with the guard
+# switched off. Measured: 21 such calls in one run (14 by unit-tester, 7 by implementer),
+# every one of them immediately after a Read of the same path was denied. The content
+# reached the context anyway; the only thing the denial bought was the wasted turn.
+#
+# This does NOT ban `cat`. It blocks an *unbounded* dump of a file that the read rules
+# would have refused. Anything piped into head/tail/grep/wc is bounded and passes.
+FULL_DUMP_RE = re.compile(
+    r"""(?:^|[;&|]\s*)\s*
+        (?:cat|bat|type|Get-Content|gc)\b(?:\s+-[A-Za-z-]+)*\s+   # cat / cat -n / type
+      | \bgrep\s+(?:-[A-Za-z]+\s+)*(?:-n\s+)?(?:""|'')\s+       # grep -n "" <file>
+      | \bsed\s+-n\s+['"]1,\$?p?['"]\s+                          # sed -n '1,$p'
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+BOUNDED_PIPE_RE = re.compile(r"\|\s*(head|tail|grep|wc|sed|awk|sort|uniq|jq)\b", re.IGNORECASE)
+PATH_TOKEN_RE = re.compile(r"(?:^|\s)((?:[./~]|[A-Za-z]:)[^\s;&|<>'\"]+|[\w./-]+\.[A-Za-z]{1,8})")
+
+
+def _dump_targets(cmd: str):
+    """Candidate file paths a full-dump command is about to print."""
+    out = []
+    for m in PATH_TOKEN_RE.finditer(cmd):
+        tok = m.group(1).strip()
+        if tok.startswith("-") or tok.endswith(("/", "*")):
+            continue
+        if os.path.isfile(tok):
+            out.append(tok)
+    return out
+
+
+# Rule 10 (v6.2) - the full test suite, once per dispatch.
+# Measured: 17 full-suite runs across one build phase (Task 8 ran it 3x, Task 9 3x) while
+# the standing instruction was "targeted tests during implementation, full suite once at
+# the end". Each run is a turn, and each turn re-sends the whole accumulated context.
+# Targeted runs (a path argument) are always allowed - they are the wanted behaviour.
+FULL_SUITE_RE = re.compile(
+    r"\b("
+    r"flutter\s+test|dart\s+test|npm\s+(?:run\s+)?test|yarn\s+test|pnpm\s+test|"
+    r"pytest|go\s+test|cargo\s+test|mvn\s+test|gradle\s+test|jest|vitest|rspec"
+    r")\b",
+    re.IGNORECASE,
+)
+# A path-ish argument means the run is scoped, not the whole suite.
+TARGETED_RE = re.compile(r"(?:^|\s)(?:[\w./-]*(?:test|spec)[\w./-]*/|[\w./-]+\.(?:dart|py|js|ts|tsx|go|rs|rb|java))\b")
+SUITE_EXEMPT = {"qa-tester", "unit-tester"}  # gate roles: verifying the suite IS their job
+
+
+def check_full_suite(payload) -> None:
+    """Rule 10 - block a repeat full-suite run inside one dispatch."""
+    cmd = str((payload.get("tool_input") or {}).get("command", ""))
+    if not cmd or not FULL_SUITE_RE.search(cmd) or TARGETED_RE.search(cmd):
+        return
+    agent_raw = agent_of(payload)
+    if not agent_raw or any(is_role(agent_raw, r) for r in SUITE_EXEMPT):
+        return
+    context_id = payload.get("agent_id") or payload.get("agentId")
+    if not context_id:
+        return
+    if already_read(str(context_id), "::full-test-suite::", {}):
+        audit(payload, "deny", "10-repeat-full-suite", cmd[:60])
+        deny(
+            "BLOCKED by context budget guard: you have already run the full test suite "
+            "once in this dispatch. Run only the tests for the files you just changed "
+            "(pass their paths), and leave the whole-suite run to the test gate that runs "
+            "after you return. A full suite re-run costs a turn, and every turn re-sends "
+            "your entire accumulated context."
+        )
+
+
+def check_dump_bypass(payload) -> None:
+    """Rule 9 - apply the Read rules to shell commands that dump a whole file."""
+    cmd = str((payload.get("tool_input") or {}).get("command", ""))
+    if not cmd or not FULL_DUMP_RE.search(cmd) or BOUNDED_PIPE_RE.search(cmd):
+        return
+    agent_raw = agent_of(payload)
+    for target in _dump_targets(cmd):
+        contract = contract_beside(target)
+        if contract and not any(is_role(agent_raw, r) for r in DISTILLER_AGENTS):
+            audit(payload, "deny", "9-dump-bypass-contract", target)
+            deny(
+                f"BLOCKED by context budget guard: dumping `{os.path.basename(target)}` "
+                f"through the shell puts the whole file in your context exactly as a full "
+                f"`Read` would - it is the same cost with the guard switched off. That "
+                f"document has been distilled; read `{contract}` instead."
+            )
+        lines, nbytes = file_stats(target)
+        if lines is None:
+            continue
+        if lines > MAX_LINES_FULL_READ or nbytes > MAX_BYTES_FULL_READ:
+            audit(payload, "deny", "9-dump-bypass-size", target)
+            deny(
+                f"BLOCKED by context budget guard: `{os.path.basename(target)}` is "
+                f"{lines} lines / {nbytes:,} bytes, and dumping it through the shell costs "
+                f"exactly what a full `Read` costs - the guard is not bypassed by changing "
+                f"tool. Use `Grep` to find the part you need, then `Read` with `offset` and "
+                f"`limit` around the match. If you truly need all of it, say so in "
+                f"NEEDS_CONTEXT."
+            )
 DOC_TARGET = re.compile(r"\.(md|markdown)\b", re.IGNORECASE)
 MEASURE_EXEMPT = {"distiller", "orchestrator", ""}
 
@@ -335,6 +462,8 @@ def main() -> None:
     tool = payload.get("tool_name")
     if tool in ("Bash", "PowerShell"):
         check_bash(payload)
+        check_full_suite(payload)
+        check_dump_bypass(payload)
         ok(payload, "shell-ok", str((payload.get("tool_input") or {}).get("command", ""))[:60])
 
     if tool != "Read":
